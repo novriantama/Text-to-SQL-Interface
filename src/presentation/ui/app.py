@@ -29,23 +29,31 @@ if st.button("Generate & Execute Query", type="primary"):
                 pipeline = get_pipeline_use_case()
                 response = pipeline.execute(QueryRequest(question=question_input))
 
-                st.subheader("Generated SQL Query")
-                st.code(response.generated_sql, language="sql")
-
-                st.subheader("Explanation")
-                st.write(response.explanation)
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Overall Confidence", f"{round(response.confidence.overall_score * 100, 1)}%")
-                with col2:
-                    st.metric("Guardrails Passed", "YES" if response.guardrails_passed else "NO")
-
-                if response.results and response.results.data:
-                    st.subheader(f"Query Results ({response.results.rows_returned} rows returned)")
-                    st.dataframe(response.results.data)
+                # Check if question is ambiguous and needs clarification
+                if response.clarification_needed and response.clarification_options:
+                    st.info("🤔 **Ambiguous Question Detected!** Please select one of the following business interpretations:")
+                    for idx, option in enumerate(response.clarification_options, 1):
+                        with st.expander(f"Option {idx}: {option.label}", expanded=True):
+                            st.write(f"**Meaning:** {option.description}")
+                            st.code(option.example_sql, language="sql")
                 else:
-                    st.info("No data returned or query executed without output.")
+                    st.subheader("Generated SQL Query")
+                    st.code(response.generated_sql, language="sql")
+
+                    st.subheader("Explanation")
+                    st.write(response.explanation)
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Overall Confidence", f"{round(response.confidence.overall_score * 100, 1)}%")
+                    with col2:
+                        st.metric("Guardrails Passed", "YES" if response.guardrails_passed else "NO")
+
+                    if response.results and response.results.data:
+                        st.subheader(f"Query Results ({response.results.rows_returned} rows returned)")
+                        st.dataframe(response.results.data)
+                    else:
+                        st.info("No data returned or query executed without output.")
 
             except Exception as err:
                 st.error(f"Error executing query: {err}")

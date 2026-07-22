@@ -5,6 +5,14 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class QueryInterpretation:
+    """Represents a specific candidate interpretation of an ambiguous question."""
+    label: str
+    description: str
+    example_sql: str
+
+
+@dataclass(frozen=True)
 class QueryRequest:
     """Natural language question input from user."""
     question: str
@@ -19,6 +27,8 @@ class GeneratedSQL:
     explanation: str
     confidence_estimate: float
     accessed_tables: list[str] = field(default_factory=list)
+    is_ambiguous: bool = False
+    clarification_options: list[QueryInterpretation] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -56,4 +66,4 @@ class QueryResponse:
     guardrails_passed: bool
     warnings: list[str] = field(default_factory=list)
     clarification_needed: bool = False
-    clarification_options: list[str] = field(default_factory=list)
+    clarification_options: list[QueryInterpretation] = field(default_factory=list)

@@ -40,6 +40,27 @@ class ProcessTextToSQLUseCase:
         # Step 2: Generate Structured SQL via LLM
         generated = self.llm.generate_sql(request.question, filtered_schema)
 
+        # Step 2b: Explicit Ambiguity Check
+        if generated.is_ambiguous and generated.clarification_options:
+            logger.info(f"Ambiguity detected for question: '{request.question}'. Returning clarification request.")
+            return QueryResponse(
+                question=request.question,
+                generated_sql=generated.sql,
+                explanation=generated.explanation or "Multiple distinct business interpretations detected. Please select an option below.",
+                results=None,
+                confidence=ConfidenceScore(
+                    overall_score=0.50,
+                    syntax_validity=1.0,
+                    back_translation_match=0.50,
+                    result_sanity_score=0.50,
+                    multi_query_consensus=0.50
+                ),
+                guardrails_passed=True,
+                warnings=["Ambiguous question detected. Please choose a specific interpretation."],
+                clarification_needed=True,
+                clarification_options=generated.clarification_options
+            )
+
         # Step 3: Validate SQL Safety through Guardrails
         explain_plan = self.db.get_explain_plan(generated.sql)
         guardrail_check = self.guardrails.validate_sql_safety(generated.sql, explain_plan)

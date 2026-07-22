@@ -89,6 +89,7 @@ class DynamicPromptBuilder:
 4. Disambiguation: Use exact string values from the categorical sample values provided in the schema whenever filtering categorical text columns (e.g. status = 'completed').
 5. Subquery Limits: Prefer clean JOINs or CTEs (WITH clauses) over deeply nested subqueries (max 3 levels).
 6. Row Limit: If the user asks for top/limit or list without specifying count, append `LIMIT 1000`.
+7. Explicit Ambiguity Handling: If the question maps to multiple distinct interpretations (e.g., 'revenue' could mean Gross Revenue vs Net Revenue, or 'top users' could mean by order count vs total spend), set `is_ambiguous = true` and return a list of `clarification_options` with labels, descriptions, and example queries for each interpretation instead of guessing.
 
 USER QUESTION: {question}
 """
