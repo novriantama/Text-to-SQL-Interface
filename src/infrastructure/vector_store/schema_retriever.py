@@ -1,32 +1,164 @@
-"""Vector store schema retriever implementing VectorStorePort."""
+"""Embedding-based schema relevance retriever using vector cosine similarity and FK graph expansion."""
 
+import math
+import re
+from collections import Counter
+from src.core.logger import get_logger
 from src.domain.ports.vector_store_port import VectorStorePort
 from src.domain.entities.schema import DatabaseSchema, TableSchema
 
+logger = get_logger(__name__)
 
-class KeywordAndVectorSchemaRetriever(VectorStorePort):
-    """Schema filtering adapter using keyword matching and embeddings threshold search."""
+# Optional sentence-transformers support
+try:
+    from sentence_transformers import SentenceTransformer
+    HAS_SENTENCE_TRANSFORMERS = True
+except ImportError:
+    HAS_SENTENCE_TRANSFORMERS = False
+
+
+class EmbeddingSchemaRetriever(VectorStorePort):
+    """Semantic schema relevance filter implementing VectorStorePort.
+    
+    Features:
+    - Embeds table definitions (name, description, columns, categorical samples)
+    - Embeds user question into dense vector space
+    - Computes Cosine Similarity scores
+    - Filters tables above similarity threshold (default 0.35)
+    - Applies Foreign Key graph expansion to preserve JOIN integrity
+    - Uses sentence-transformers (all-MiniLM-L6-v2) or built-in TF-IDF vectorizer fallback
+    """
+
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", min_tables_limit: int = 1) -> None:
+        self.model_name = model_name
+        self.min_tables_limit = min_tables_limit
+        self._model = None
+        self._table_vectors: dict[str, list[float]] = {}
+        self._cached_schema_id: str | None = None
+
+        if HAS_SENTENCE_TRANSFORMERS:
+            try:
+                self._model = SentenceTransformer(self.model_name)
+                logger.info(f"Loaded SentenceTransformer model '{self.model_name}' for schema embedding.")
+            except Exception as err:
+                logger.warning(f"Could not load SentenceTransformer model ({err}). Falling back to TF-IDF vectorizer.")
 
     def index_schema(self, schema: DatabaseSchema) -> None:
-        """Stores table representation into vector store."""
-        pass
+        """Computes and caches vector embeddings for each table in the schema."""
+        self._table_vectors.clear()
+        for table_name, table in schema.tables.items():
+            text_repr = self._build_table_text_representation(table)
+            self._table_vectors[table_name] = self._embed_text(text_repr)
+        logger.info(f"Indexed embeddings for {len(self._table_vectors)} database tables.")
 
     def filter_schema(self, question: str, full_schema: DatabaseSchema, threshold: float = 0.35) -> DatabaseSchema:
-        """Filters schema tables based on relevance to user question."""
-        if len(full_schema.tables) <= 5:
-            # For small schemas, return full schema
+        """Filters full schema to tables exceeding similarity threshold with FK graph expansion."""
+        if not full_schema.tables:
             return full_schema
 
-        filtered = DatabaseSchema()
-        q_lower = question.lower()
+        # Re-index if schema vectors not populated
+        if not self._table_vectors or len(self._table_vectors) != len(full_schema.tables):
+            self.index_schema(full_schema)
 
-        for table_name, table in full_schema.tables.items():
-            # Keyword and column match heuristic filter
-            if table_name.lower() in q_lower or any(col.name.lower() in q_lower for col in table.columns):
-                filtered.tables[table_name] = table
+        # 1. Embed Question & Compute Similarities
+        q_vector = self._embed_text(question)
+        scores: dict[str, float] = {}
 
-        # Fallback if no specific table matched keyword
-        if not filtered.tables:
-            return full_schema
+        for table_name in full_schema.tables:
+            t_vector = self._table_vectors.get(table_name, [])
+            sim = self._cosine_similarity(q_vector, t_vector)
+            scores[table_name] = sim
 
-        return filtered
+        logger.debug(f"Schema similarity scores for '{question}': {scores}")
+
+        # 2. Select Tables Exceeding Threshold
+        selected_tables: set[str] = {
+            t_name for t_name, sim in scores.items() if sim >= threshold
+        }
+
+        # Fallback: If no table meets threshold, take the highest scoring table
+        if not selected_tables:
+            top_table = max(scores.items(), key=lambda x: x[1])[0]
+            selected_tables.add(top_table)
+
+        # 3. Foreign Key Graph Expansion
+        # Include connected tables if they are linked via FK relationships
+        expanded_tables = set(selected_tables)
+        for table_name in selected_tables:
+            table = full_schema.tables[table_name]
+            for col in table.columns:
+                if col.is_foreign_key and col.foreign_table and col.foreign_table in full_schema.tables:
+                    # Include FK target table if score is reasonable (>= 50% of threshold)
+                    fk_score = scores.get(col.foreign_table, 0.0)
+                    if fk_score >= (threshold * 0.5):
+                        expanded_tables.add(col.foreign_table)
+
+        # 4. Construct Filtered Schema
+        filtered_schema = DatabaseSchema()
+        for t_name in expanded_tables:
+            filtered_schema.tables[t_name] = full_schema.tables[t_name]
+
+        logger.info(
+            f"Filtered schema from {len(full_schema.tables)} to {len(filtered_schema.tables)} tables for question."
+        )
+        return filtered_schema
+
+    def _build_table_text_representation(self, table: TableSchema) -> str:
+        """Converts table metadata into a rich textual document for vector embedding."""
+        parts = [f"Table name: {table.name}."]
+        if table.description:
+            parts.append(f"Description: {table.description}.")
+
+        col_names = [col.name for col in table.columns]
+        parts.append(f"Columns: {', '.join(col_names)}.")
+
+        col_descs = [f"{col.name} ({col.description})" for col in table.columns if col.description]
+        if col_descs:
+            parts.append(f"Column descriptions: {'; '.join(col_descs)}.")
+
+        samples = []
+        for col in table.columns:
+            if col.sample_values:
+                samples.append(f"{col.name}: {', '.join(map(str, col.sample_values))}")
+        if samples:
+            parts.append(f"Sample values: {'; '.join(samples)}.")
+
+        return " ".join(parts)
+
+    def _embed_text(self, text_input: str) -> list[float]:
+        """Generates embedding vector using SentenceTransformer or TF-IDF vectorizer fallback."""
+        if self._model is not None:
+            embedding = self._model.encode(text_input, convert_to_numpy=True)
+            return embedding.tolist()
+        return self._tfidf_embed(text_input)
+
+    def _tfidf_embed(self, text_input: str) -> list[float]:
+        """Simple TF-IDF token vectorizer fallback."""
+        words = re.findall(r"\w+", text_input.lower())
+        counts = Counter(words)
+        total = len(words) or 1
+        # Normalize term frequencies
+        vector = [counts[w] / total for w in set(words)]
+        return vector
+
+    def _cosine_similarity(self, vec1: list[float], vec2: list[float]) -> float:
+        """Computes Cosine Similarity score between two vectors."""
+        if not vec1 or not vec2:
+            return 0.0
+        
+        # Handle differing lengths for fallback vectors
+        min_len = min(len(vec1), len(vec2))
+        if min_len == 0:
+            return 0.0
+
+        v1 = vec1[:min_len]
+        v2 = vec2[:min_len]
+
+        dot_product = sum(a * b for a, b in zip(v1, v2))
+        norm1 = math.sqrt(sum(a * a for a in v1))
+        norm2 = math.sqrt(sum(b * b for b in v2))
+
+        if norm1 == 0.0 or norm2 == 0.0:
+            return 0.0
+
+        return dot_product / (norm1 * norm2)

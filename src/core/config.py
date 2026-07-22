@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     )
 
     # LLM Settings
-    LLM_PROVIDER: Literal["openai", "anthropic"] = Field(default="openai", description="Active LLM provider")
+    LLM_PROVIDER: Literal["openai", "anthropic"] = Field(default="anthropic", description="Active LLM provider")
     OPENAI_API_KEY: str = Field(default="", description="OpenAI API Key")
     OPENAI_MODEL: str = Field(default="gpt-4o", description="OpenAI LLM Model Name")
     ANTHROPIC_API_KEY: str = Field(default="", description="Anthropic API Key")
