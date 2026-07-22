@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: text_to_sql_postgres
+    environment:
+      POSTGRES_DB: text_to_sql_db
+      POSTGRES_USER: text_sql_admin
+      POSTGRES_PASSWORD: admin_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U text_sql_admin -d text_to_sql_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: text_to_sql_api
+    command: uvicorn src.presentation.api.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=development
+      - READONLY_DB_URI=postgresql://text_sql_admin:admin_password@postgres:5432/text_to_sql_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  ui:
+    build: .
+    container_name: text_to_sql_ui
+    command: streamlit run src/presentation.ui/app.py --server.port 8501
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:
