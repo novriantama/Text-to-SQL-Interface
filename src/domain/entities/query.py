@@ -27,6 +27,7 @@ class GeneratedSQL:
     explanation: str
     confidence_estimate: float
     accessed_tables: list[str] = field(default_factory=list)
+    accessed_columns: list[str] = field(default_factory=list)
     is_ambiguous: bool = False
     clarification_options: list[QueryInterpretation] = field(default_factory=list)
 

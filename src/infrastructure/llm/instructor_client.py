@@ -38,6 +38,7 @@ class LLMSQLOutputSchema(BaseModel):
     explanation: str = Field(description="Natural language explanation of what the query does")
     confidence_estimate: float = Field(description="Model confidence score between 0.0 and 1.0")
     accessed_tables: list[str] = Field(default_factory=list, description="List of tables accessed")
+    accessed_columns: list[str] = Field(default_factory=list, description="List of specific columns accessed")
     is_ambiguous: bool = Field(
         default=False,
         description="Set to true IF AND ONLY IF the question has multiple distinct business interpretations."
@@ -149,6 +150,7 @@ class InstructorLLMAdapter(LLMPort):
                 explanation=res.explanation,
                 confidence_estimate=res.confidence_estimate,
                 accessed_tables=res.accessed_tables,
+                accessed_columns=res.accessed_columns,
                 is_ambiguous=res.is_ambiguous,
                 clarification_options=clarification_opts
             )
