@@ -33,10 +33,13 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = Field(default="", description="Anthropic API Key")
     ANTHROPIC_MODEL: str = Field(default="claude-3-5-sonnet-20241022", description="Anthropic Model Name")
 
-    # Safety Guardrails Thresholds
+    # Safety Guardrails Thresholds & Flags
+    BLOCK_DDL: bool = Field(default=True, description="Enable blocking DDL (CREATE, ALTER, DROP, TRUNCATE, etc.)")
+    BLOCK_DML_WRITES: bool = Field(default=True, description="Enable blocking DML writes (INSERT, UPDATE, DELETE, MERGE)")
     MAX_ROW_LIMIT: int = Field(default=1000, description="Max rows returned by any query")
     MAX_SUBQUERY_DEPTH: int = Field(default=3, description="Max subquery nesting levels allowed")
     MAX_EXPLAIN_COST: float = Field(default=50000.0, description="Max estimated query scan cost")
+    ENABLE_GUARDRAIL_LOGGING: bool = Field(default=True, description="Log all blocked queries to audit log")
 
     # Vector Store Settings
     VECTOR_SIMILARITY_THRESHOLD: float = Field(

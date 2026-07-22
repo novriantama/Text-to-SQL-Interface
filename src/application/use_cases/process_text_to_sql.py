@@ -61,7 +61,7 @@ class ProcessTextToSQLUseCase:
                 clarification_options=generated.clarification_options
             )
 
-        # Step 3: Validate SQL Safety through Guardrails
+        # Step 3: Validate SQL Safety through Configurable Guardrails
         explain_plan = self.db.get_explain_plan(generated.sql)
         guardrail_check = self.guardrails.validate_sql_safety(generated.sql, explain_plan)
 
@@ -71,8 +71,13 @@ class ProcessTextToSQLUseCase:
                 f"Security guardrail blocked query: {guardrail_check.blocked_reason}"
             )
 
+        # Enforce Row Limit if missing
+        target_sql = generated.sql
+        if hasattr(self.guardrails, "enforce_row_limit"):
+            target_sql, _ = self.guardrails.enforce_row_limit(generated.sql)
+
         # Step 4: Execute SQL in Read-Only Sandbox
-        query_result = self.db.execute_read_only(generated.sql)
+        query_result = self.db.execute_read_only(target_sql)
 
         # Step 5: Run Hallucination & Consensus Validation
         hallucination_check = self.validator.check_hallucination(
@@ -95,7 +100,7 @@ class ProcessTextToSQLUseCase:
 
         return QueryResponse(
             question=request.question,
-            generated_sql=generated.sql,
+            generated_sql=target_sql,
             explanation=generated.explanation,
             results=query_result,
             confidence=confidence,
