@@ -7,6 +7,7 @@ from src.infrastructure.guardrails.ast_parser import ASTGuardrailAdapter
 from src.infrastructure.llm.instructor_client import InstructorLLMAdapter
 from src.infrastructure.validation.back_translator import DefaultHallucinationValidatorAdapter
 from src.infrastructure.vector_store.schema_retriever import EmbeddingSchemaRetriever
+from src.infrastructure.history.history_repository import QueryHistoryRepository
 from src.application.use_cases.process_text_to_sql import ProcessTextToSQLUseCase
 from src.application.use_cases.extract_schema import ExtractSchemaUseCase
 from src.application.use_cases.submit_feedback import SubmitFeedbackUseCase
@@ -44,3 +45,9 @@ def get_extract_schema_use_case() -> ExtractSchemaUseCase:
 def get_submit_feedback_use_case() -> SubmitFeedbackUseCase:
     """Instantiates submit feedback use case."""
     return SubmitFeedbackUseCase()
+
+
+@lru_cache()
+def get_history_repository() -> QueryHistoryRepository:
+    """Instantiates thread-safe session query history repository."""
+    return QueryHistoryRepository()
