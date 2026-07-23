@@ -19,7 +19,7 @@ def get_pipeline_use_case() -> ProcessTextToSQLUseCase:
     db_port = SandboxDatabaseAdapter(engine)
     llm_port = InstructorLLMAdapter()
     guardrail_port = ASTGuardrailAdapter()
-    validation_port = DefaultHallucinationValidatorAdapter()
+    validation_port = DefaultHallucinationValidatorAdapter(llm_port=llm_port)
     vector_store_port = EmbeddingSchemaRetriever()
 
     return ProcessTextToSQLUseCase(
