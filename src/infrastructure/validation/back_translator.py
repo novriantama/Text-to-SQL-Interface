@@ -1,4 +1,4 @@
-"""Back-translation alignment judge implementing ValidationPort for SQL-to-question verification."""
+"""Back-translation alignment judge implementing ValidationPort for SQL-to-question verification and result sanity checking."""
 
 import difflib
 import re
@@ -7,6 +7,7 @@ from src.domain.ports.validation_port import ValidationPort
 from src.domain.ports.llm_port import LLMPort
 from src.domain.entities.query import QueryResult, GeneratedSQL
 from src.domain.entities.validation import HallucinationCheckResult
+from src.infrastructure.validation.sanity_checker import ResultSanityChecker
 
 logger = get_logger(__name__)
 
@@ -18,9 +19,15 @@ class DefaultHallucinationValidatorAdapter(ValidationPort):
         "what", "is", "the", "for", "this", "a", "an", "in", "of", "to", "show", "list", "get", "retrieve", "data", "select", "find", "all", "are", "by", "with", "how", "many"
     }
 
-    def __init__(self, llm_port: LLMPort | None = None, alignment_threshold: float = 0.60) -> None:
+    def __init__(
+        self,
+        llm_port: LLMPort | None = None,
+        alignment_threshold: float = 0.60,
+        sanity_checker: ResultSanityChecker | None = None
+    ) -> None:
         self.llm = llm_port
         self.alignment_threshold = alignment_threshold
+        self.sanity_checker = sanity_checker or ResultSanityChecker()
 
     def check_hallucination(
         self,
@@ -29,7 +36,7 @@ class DefaultHallucinationValidatorAdapter(ValidationPort):
         query_result: QueryResult | None
     ) -> HallucinationCheckResult:
         """Executes verification checks on query logic and outputs."""
-        warnings = []
+        warnings: list[str] = []
 
         # 1. Back-translation alignment verification
         if self.llm is not None:
@@ -51,15 +58,8 @@ class DefaultHallucinationValidatorAdapter(ValidationPort):
             logger.warning(warning_msg)
 
         # 2. Result Sanity Checks
-        sanity_passed = True
-        if query_result and query_result.data:
-            # Check for high null ratio in result set
-            first_row = query_result.data[0]
-            if first_row:
-                null_keys = [k for k, v in first_row.items() if v is None]
-                if len(null_keys) > (len(first_row) / 2):
-                    sanity_passed = False
-                    warnings.append("High ratio of NULL values detected in result dataset.")
+        sanity_passed, sanity_warnings = self.sanity_checker.check_sanity(query_result, original_question)
+        warnings.extend(sanity_warnings)
 
         # 3. Consensus Engine placeholder
         consensus_matched = True
