@@ -44,12 +44,13 @@ class QueryResult:
 
 @dataclass(frozen=True)
 class ConfidenceScore:
-    """Combined confidence score breakdown based on multi-check signals."""
+    """Combined confidence score breakdown based on 5 core verification signals."""
     overall_score: float
     syntax_validity: float
     back_translation_match: float
     result_sanity_score: float
     multi_query_consensus: float
+    schema_coverage: float = 1.0
 
     def is_high_confidence(self, threshold: float = 0.8) -> bool:
         """Determines if the generated SQL is safe and accurate."""
