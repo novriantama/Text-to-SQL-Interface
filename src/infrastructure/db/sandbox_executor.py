@@ -19,6 +19,7 @@ class SandboxDatabaseAdapter(DatabasePort):
     1. Read-Only Transaction Mode: Issues `SET TRANSACTION READ ONLY` on PostgreSQL connections.
     2. Automatic Rollback: Always executes transaction rollback in a `finally` block to prevent mutations.
     3. SELECT-Only DB User Compatibility: Works seamlessly with restricted read-only database credentials.
+    4. Audit Logging: Logs query execution metrics (rows returned, execution time ms, EXPLAIN plan) for audit compliance.
     """
 
     def __init__(self, engine: Engine) -> None:
@@ -30,7 +31,9 @@ class SandboxDatabaseAdapter(DatabasePort):
 
     def execute_read_only(self, sql_query: str) -> QueryResult:
         """Executes query within a sandboxed read-only transaction block with mandatory rollback."""
+        explain_plan = self.get_explain_plan(sql_query)
         start_time = time.time()
+
         with self.engine.connect() as conn:
             # Begin transaction block
             trans = conn.begin()
@@ -43,20 +46,25 @@ class SandboxDatabaseAdapter(DatabasePort):
                 result = conn.execute(text(sql_query))
                 keys = list(result.keys()) if result.returns_rows else []
                 rows = [dict(zip(keys, row)) for row in result.fetchall()] if result.returns_rows else []
-                elapsed_ms = (time.time() - start_time) * 1000.0
+                elapsed_ms = round((time.time() - start_time) * 1000.0, 2)
 
-                logger.debug(f"Executed query in sandbox ({len(rows)} rows, {round(elapsed_ms, 2)}ms)")
+                # 3. Log execution for audit compliance
+                logger.info(
+                    f"[AUDIT QUERY EXECUTION] Rows: {len(rows)} | Time: {elapsed_ms}ms | Query: '{sql_query}'"
+                )
+
                 return QueryResult(
                     data=rows,
                     columns=keys,
                     rows_returned=len(rows),
-                    execution_time_ms=round(elapsed_ms, 2)
+                    execution_time_ms=elapsed_ms,
+                    explain_plan=explain_plan
                 )
             except Exception as err:
-                logger.error(f"Error during sandbox query execution: {err}")
+                logger.error(f"[AUDIT QUERY EXECUTION FAILED] Reason: {err} | Query: '{sql_query}'")
                 raise err
             finally:
-                # 3. Always rollback transaction block to guarantee zero state persistence
+                # 4. Always rollback transaction block to guarantee zero state persistence
                 trans.rollback()
 
     def get_explain_plan(self, sql_query: str) -> str:

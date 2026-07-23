@@ -31,7 +31,7 @@ class ProcessTextToSQLUseCase:
 
     def execute(self, request: QueryRequest) -> QueryResponse:
         """Executes the full pipeline for a natural language question."""
-        logger.info(f"Processing question: '{request.question}'")
+        logger.info(f"[AUDIT QUESTION START] Processing question: '{request.question}'")
 
         # Step 1: Introspect & Filter Schema
         full_schema = self.db.extract_schema()
@@ -42,7 +42,7 @@ class ProcessTextToSQLUseCase:
 
         # Step 2b: Explicit Ambiguity Check
         if generated.is_ambiguous and generated.clarification_options:
-            logger.info(f"Ambiguity detected for question: '{request.question}'. Returning clarification request.")
+            logger.info(f"[AUDIT AMBIGUITY DETECTED] Question: '{request.question}'. Returning clarification request.")
             return QueryResponse(
                 question=request.question,
                 generated_sql=generated.sql,
@@ -66,7 +66,7 @@ class ProcessTextToSQLUseCase:
         guardrail_check = self.guardrails.validate_sql_safety(generated.sql, explain_plan)
 
         if not guardrail_check.is_safe:
-            logger.warning(f"Query blocked by guardrails: {guardrail_check.blocked_reason}")
+            logger.warning(f"[AUDIT GUARDRAIL BLOCKED] Reason: {guardrail_check.blocked_reason} | Query: '{generated.sql}'")
             raise GuardrailViolationException(
                 f"Security guardrail blocked query: {guardrail_check.blocked_reason}"
             )
@@ -76,7 +76,7 @@ class ProcessTextToSQLUseCase:
         if hasattr(self.guardrails, "enforce_row_limit"):
             target_sql, _ = self.guardrails.enforce_row_limit(generated.sql)
 
-        # Step 4: Execute SQL in Read-Only Sandbox
+        # Step 4: Execute SQL in Read-Only Sandbox and Capture Execution Metrics
         query_result = self.db.execute_read_only(target_sql)
 
         # Step 5: Run Hallucination & Consensus Validation
@@ -96,6 +96,11 @@ class ProcessTextToSQLUseCase:
             back_translation_match=hallucination_check.alignment_score,
             result_sanity_score=1.0 if hallucination_check.sanity_checks_passed else 0.0,
             multi_query_consensus=1.0 if hallucination_check.consensus_matched else 0.0,
+        )
+
+        logger.info(
+            f"[AUDIT PIPELINE COMPLETE] Question: '{request.question}' | Rows: {query_result.rows_returned} | "
+            f"Time: {query_result.execution_time_ms}ms | Confidence: {round(confidence.overall_score * 100, 1)}%"
         )
 
         return QueryResponse(
