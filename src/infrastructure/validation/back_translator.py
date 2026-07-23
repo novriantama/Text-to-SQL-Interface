@@ -1,4 +1,4 @@
-"""Back-translation alignment judge implementing ValidationPort for SQL-to-question verification and result sanity checking."""
+"""Back-translation alignment judge implementing ValidationPort for SQL-to-question verification, result sanity checking, and multi-query consensus."""
 
 import difflib
 import re
@@ -8,12 +8,13 @@ from src.domain.ports.llm_port import LLMPort
 from src.domain.entities.query import QueryResult, GeneratedSQL
 from src.domain.entities.validation import HallucinationCheckResult
 from src.infrastructure.validation.sanity_checker import ResultSanityChecker
+from src.infrastructure.validation.consensus_engine import MultiQueryConsensusEngine
 
 logger = get_logger(__name__)
 
 
 class DefaultHallucinationValidatorAdapter(ValidationPort):
-    """Validator adapter performing SQL-to-question back-translation verification, result sanity heuristics, and consensus checks."""
+    """Validator adapter performing SQL-to-question back-translation verification, result sanity heuristics, and multi-query consensus comparison."""
 
     STOPWORDS = {
         "what", "is", "the", "for", "this", "a", "an", "in", "of", "to", "show", "list", "get", "retrieve", "data", "select", "find", "all", "are", "by", "with", "how", "many"
@@ -23,19 +24,22 @@ class DefaultHallucinationValidatorAdapter(ValidationPort):
         self,
         llm_port: LLMPort | None = None,
         alignment_threshold: float = 0.60,
-        sanity_checker: ResultSanityChecker | None = None
+        sanity_checker: ResultSanityChecker | None = None,
+        consensus_engine: MultiQueryConsensusEngine | None = None
     ) -> None:
         self.llm = llm_port
         self.alignment_threshold = alignment_threshold
         self.sanity_checker = sanity_checker or ResultSanityChecker()
+        self.consensus_engine = consensus_engine or MultiQueryConsensusEngine()
 
     def check_hallucination(
         self,
         original_question: str,
         generated_sql: GeneratedSQL,
-        query_result: QueryResult | None
+        query_result: QueryResult | None,
+        alternative_result: QueryResult | None = None
     ) -> HallucinationCheckResult:
-        """Executes verification checks on query logic and outputs."""
+        """Executes verification checks on query logic, sanity outputs, and multi-query consensus."""
         warnings: list[str] = []
 
         # 1. Back-translation alignment verification
@@ -61,8 +65,14 @@ class DefaultHallucinationValidatorAdapter(ValidationPort):
         sanity_passed, sanity_warnings = self.sanity_checker.check_sanity(query_result, original_question)
         warnings.extend(sanity_warnings)
 
-        # 3. Consensus Engine placeholder
+        # 3. Multi-Query Consensus Comparison
         consensus_matched = True
+        if alternative_result is not None:
+            consensus_matched, discrepancy_msg = self.consensus_engine.compare_result_sets(
+                query_result, alternative_result
+            )
+            if not consensus_matched and discrepancy_msg:
+                warnings.append(discrepancy_msg)
 
         return HallucinationCheckResult(
             back_translated_question=back_translated,

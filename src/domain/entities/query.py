@@ -68,3 +68,6 @@ class QueryResponse:
     warnings: list[str] = field(default_factory=list)
     clarification_needed: bool = False
     clarification_options: list[QueryInterpretation] = field(default_factory=list)
+    alternative_sql: str | None = None
+    alternative_explanation: str | None = None
+    alternative_results: QueryResult | None = None

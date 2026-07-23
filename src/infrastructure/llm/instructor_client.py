@@ -1,4 +1,4 @@
-"""LLM Provider adapter using Anthropic Claude Sonnet & OpenAI with Instructor for structured output and explicit ambiguity handling."""
+"""LLM Provider adapter using Anthropic Claude Sonnet & OpenAI with Instructor for structured output, explicit ambiguity handling, and multi-query consensus generation."""
 
 from pydantic import BaseModel, Field
 from src.core.config import settings
@@ -50,7 +50,7 @@ class LLMSQLOutputSchema(BaseModel):
 
 
 class InstructorLLMAdapter(LLMPort):
-    """LLM client adapter implementing structured output generation and back-translation via Anthropic Claude Sonnet."""
+    """LLM client adapter implementing structured output generation, alternative query formulation, and back-translation via Anthropic Claude Sonnet."""
 
     def __init__(self) -> None:
         self.prompt_builder = DynamicPromptBuilder(dialect="PostgreSQL")
@@ -164,6 +164,68 @@ class InstructorLLMAdapter(LLMPort):
                 accessed_tables=[table_name],
                 is_ambiguous=False,
                 clarification_options=[]
+            )
+
+    def generate_alternative_sql(
+        self,
+        question: str,
+        schema_context: DatabaseSchema,
+        primary_sql: str
+    ) -> GeneratedSQL:
+        """Generates an independent alternative SQL approach (e.g. CTEs, subqueries, different JOINs) for consensus validation."""
+        if self._client is None:
+            table_name = list(schema_context.tables.keys())[0] if schema_context.tables else "orders"
+            if "diverge_consensus" in question.lower():
+                # Simulate divergent alternative query for testing
+                alt_sql = f"SELECT * FROM {table_name} WHERE 1=0 LIMIT 100;"
+            else:
+                # Equivalent alternative approach using subquery/CTE
+                alt_sql = f"SELECT * FROM (SELECT * FROM {table_name}) AS alt_table LIMIT 100;"
+            
+            return GeneratedSQL(
+                sql=alt_sql,
+                explanation="Alternative independent query formulation using CTE/subquery syntax.",
+                confidence_estimate=0.85,
+                accessed_tables=[table_name],
+                is_ambiguous=False
+            )
+
+        alt_prompt = (
+            f"Generate an ALTERNATIVE independent PostgreSQL query for the question: '{question}'\n\n"
+            f"CRITICAL: Use a DIFFERENT SQL structure/approach than the primary query:\n`{primary_sql}`\n"
+            f"For example, use subqueries instead of JOINs, CTEs (WITH clause), or different aggregation syntax.\n\n"
+            f"Schema Context:\n{schema_context.to_prompt_str()}"
+        )
+
+        try:
+            if settings.LLM_PROVIDER == "anthropic":
+                res: LLMSQLOutputSchema = self._client.messages.create(
+                    model=settings.ANTHROPIC_MODEL,
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": alt_prompt}],
+                    response_model=LLMSQLOutputSchema
+                )
+            else:
+                res = self._client.chat.completions.create(
+                    model=settings.OPENAI_MODEL,
+                    response_model=LLMSQLOutputSchema,
+                    messages=[{"role": "user", "content": alt_prompt}]
+                )
+
+            return GeneratedSQL(
+                sql=res.sql,
+                explanation=f"Alternative approach: {res.explanation}",
+                confidence_estimate=res.confidence_estimate,
+                accessed_tables=res.accessed_tables,
+                accessed_columns=res.accessed_columns,
+                is_ambiguous=False
+            )
+        except Exception as err:
+            logger.error(f"Error generating alternative SQL: {err}")
+            return GeneratedSQL(
+                sql=primary_sql,
+                explanation="Fallback to primary SQL formulation.",
+                confidence_estimate=0.50
             )
 
     def back_translate_sql(self, sql_query: str) -> str:

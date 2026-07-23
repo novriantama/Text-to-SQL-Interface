@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 
 class ProcessTextToSQLUseCase:
-    """Orchestrates end-to-end question translation, safety checks, execution, and validation."""
+    """Orchestrates end-to-end question translation, safety checks, execution, and multi-query validation."""
 
     def __init__(
         self,
@@ -37,7 +37,7 @@ class ProcessTextToSQLUseCase:
         full_schema = self.db.extract_schema()
         filtered_schema = self.vector_store.filter_schema(request.question, full_schema)
 
-        # Step 2: Generate Structured SQL via LLM
+        # Step 2: Generate Primary Structured SQL via LLM
         generated = self.llm.generate_sql(request.question, filtered_schema)
 
         # Step 2b: Explicit Ambiguity Check
@@ -61,7 +61,7 @@ class ProcessTextToSQLUseCase:
                 clarification_options=generated.clarification_options
             )
 
-        # Step 3: Validate SQL Safety through Configurable Guardrails
+        # Step 3: Validate Primary SQL Safety through Configurable Guardrails
         explain_plan = self.db.get_explain_plan(generated.sql)
         guardrail_check = self.guardrails.validate_sql_safety(generated.sql, explain_plan)
 
@@ -71,20 +71,44 @@ class ProcessTextToSQLUseCase:
                 f"Security guardrail blocked query: {guardrail_check.blocked_reason}"
             )
 
-        # Enforce Row Limit if missing
+        # Enforce Row Limit on Primary Query
         target_sql = generated.sql
         if hasattr(self.guardrails, "enforce_row_limit"):
             target_sql, _ = self.guardrails.enforce_row_limit(generated.sql)
 
-        # Step 4: Execute SQL in Read-Only Sandbox and Capture Execution Metrics
+        # Step 4: Execute Primary SQL in Read-Only Sandbox
         query_result = self.db.execute_read_only(target_sql)
 
-        # Step 5: Run Hallucination & Consensus Validation
-        hallucination_check = self.validator.check_hallucination(
-            request.question, generated, query_result
+        # Step 5: Multi-Query Validation - Generate & Execute Independent Alternative SQL Approach
+        alt_generated = self.llm.generate_alternative_sql(
+            request.question, filtered_schema, primary_sql=generated.sql
         )
+        alt_sql = alt_generated.sql
+        if hasattr(self.guardrails, "enforce_row_limit"):
+            alt_sql, _ = self.guardrails.enforce_row_limit(alt_generated.sql)
 
-        # Step 6: Compute Composite Confidence Score
+        alt_result = None
+        try:
+            alt_guardrail = self.guardrails.validate_sql_safety(alt_sql)
+            if alt_guardrail.is_safe:
+                alt_result = self.db.execute_read_only(alt_sql)
+        except Exception as err:
+            logger.debug(f"Alternative query execution skipped or failed: {err}")
+
+        # Step 6: Run Hallucination & Consensus Validation
+        if hasattr(self.validator, "check_hallucination"):
+            import inspect
+            sig = inspect.signature(self.validator.check_hallucination)
+            if "alternative_result" in sig.parameters:
+                hallucination_check = self.validator.check_hallucination(
+                    request.question, generated, query_result, alternative_result=alt_result
+                )
+            else:
+                hallucination_check = self.validator.check_hallucination(
+                    request.question, generated, query_result
+                )
+
+        # Step 7: Compute Composite Confidence Score
         confidence = ConfidenceScore(
             overall_score=(
                 1.0 * (1 if guardrail_check.is_safe else 0)
@@ -99,8 +123,9 @@ class ProcessTextToSQLUseCase:
         )
 
         logger.info(
-            f"[AUDIT PIPELINE COMPLETE] Question: '{request.question}' | Rows: {query_result.rows_returned} | "
-            f"Time: {query_result.execution_time_ms}ms | Confidence: {round(confidence.overall_score * 100, 1)}%"
+            f"[AUDIT PIPELINE COMPLETE] Question: '{request.question}' | Primary Rows: {query_result.rows_returned} | "
+            f"Alt Rows: {alt_result.rows_returned if alt_result else 0} | Consensus: {hallucination_check.consensus_matched} | "
+            f"Confidence: {round(confidence.overall_score * 100, 1)}%"
         )
 
         return QueryResponse(
@@ -111,4 +136,7 @@ class ProcessTextToSQLUseCase:
             confidence=confidence,
             guardrails_passed=guardrail_check.is_safe,
             warnings=hallucination_check.anomaly_warnings,
+            alternative_sql=alt_sql,
+            alternative_explanation=alt_generated.explanation,
+            alternative_results=alt_result
         )
