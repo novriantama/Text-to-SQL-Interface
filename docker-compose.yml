@@ -12,6 +12,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./data/init_seed.sql:/docker-entrypoint-initdb.d/init_seed.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U text_sql_admin -d text_to_sql_db"]
       interval: 5s
@@ -19,7 +20,9 @@ services:
       retries: 5
 
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: text_to_sql_api
     command: uvicorn src.presentation.api.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
@@ -33,18 +36,17 @@ services:
     volumes:
       - .:/app
 
-  ui:
-    build: .
-    container_name: text_to_sql_ui
-    command: streamlit run src/presentation.ui/app.py --server.port 8501
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: text_to_sql_frontend
     ports:
-      - "8501:8501"
-    environment:
-      - API_URL=http://api:8000
+      - "3000:3000"
     depends_on:
       - api
-    volumes:
-      - .:/app
+    environment:
+      - VITE_API_URL=http://localhost:8000
 
 volumes:
   postgres_data:

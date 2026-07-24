@@ -1,15 +1,17 @@
-.PHONY: help install dev test lint format run-api run-ui docker-build docker-up docker-down
+.PHONY: help install dev test eval lint format run-api run-ui run-frontend docker-build docker-up docker-down docker-logs
 
 help:
 	@echo "Available commands:"
-	@echo "  install      Install all dependencies using pip/editable mode"
-	@echo "  dev          Install dev dependencies"
-	@echo "  test         Run unit, integration, and evaluation tests"
-	@echo "  lint         Run ruff and mypy"
+	@echo "  install      Install all Python dependencies"
+	@echo "  dev          Install development dependencies"
+	@echo "  test         Run unit and integration test suite"
+	@echo "  eval         Run 52-case automated evaluation benchmark runner"
+	@echo "  lint         Run ruff and mypy linters"
 	@echo "  format       Format code with black and ruff"
 	@echo "  run-api      Run FastAPI server on port 8000"
-	@echo "  run-ui       Run Streamlit UI on port 8501"
-	@echo "  docker-up    Start Docker containers"
+	@echo "  run-frontend Run Vite React frontend on port 3000"
+	@echo "  docker-build Build all Docker containers (Postgres, API, Frontend)"
+	@echo "  docker-up    Start full containerized stack with seeded database"
 	@echo "  docker-down  Stop Docker containers"
 
 install:
@@ -19,7 +21,10 @@ dev:
 	pip install -e ".[dev]"
 
 test:
-	pytest tests/ -v --cov=src
+	python3 -m unittest discover -s tests -p "test_*.py"
+
+eval:
+	PYTHONPATH=. python3 scripts/run_evals.py
 
 lint:
 	ruff check src/ tests/
@@ -32,14 +37,17 @@ format:
 run-api:
 	uvicorn src.presentation.api.main:app --host 0.0.0.0 --port 8000 --reload
 
-run-ui:
-	streamlit run src/presentation/ui/app.py --server.port 8501
+run-frontend:
+	cd frontend && npm run dev
 
 docker-build:
 	docker-compose build
 
 docker-up:
-	docker-compose up -d
+	docker-compose up -d --build
 
 docker-down:
 	docker-compose down
+
+docker-logs:
+	docker-compose logs -f
