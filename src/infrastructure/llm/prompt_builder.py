@@ -52,7 +52,7 @@ class DynamicPromptBuilder:
                 glossary_lines.append(line)
             glossary_context = "\n".join(glossary_lines) + "\n\n"
 
-        # 3. Resolve Few-Shot Examples (3 to 5 pairs)
+        # 3. Resolve Few-Shot Examples (up to 2 pairs)
         resolved_shots: list[FewShotExample] = []
         if few_shots:
             for s in few_shots:
@@ -63,33 +63,27 @@ class DynamicPromptBuilder:
                         FewShotExample(question=s["question"], sql=s["sql"], explanation=s.get("explanation"))
                     )
         else:
-            resolved_shots = self.few_shot_repo.get_relevant_examples(question, limit=4)
+            resolved_shots = self.few_shot_repo.get_relevant_examples(question, limit=2)
 
-        few_shot_lines = ["### FEW-SHOT EXAMPLES (QUESTION-TO-SQL PAIRS):"]
+        few_shot_lines = ["### FEW-SHOT EXAMPLES:"]
         for shot in resolved_shots:
-            few_shot_lines.append(f"Q: {shot.question}")
-            few_shot_lines.append(f"SQL: {shot.sql}")
-            if shot.explanation:
-                few_shot_lines.append(f"Explanation: {shot.explanation}")
-            few_shot_lines.append("")
-        few_shot_context = "\n".join(few_shot_lines).strip()
+            few_shot_lines.append(f"Q: {shot.question}\nSQL: {shot.sql}")
+        few_shot_context = "\n\n".join(few_shot_lines).strip()
 
-        # 4. Construct System Prompt
-        prompt = f"""You are an expert {self.dialect} Data Engineer. Your task is to translate the user's natural language question into a valid, highly efficient {self.dialect} SQL query based strictly on the schema provided below.
+        # 4. Construct Concise System Prompt
+        prompt = f"""You are a {self.dialect} Data Engineer. Translate the user's question into a valid, efficient {self.dialect} SELECT query strictly using the schema below.
 
 ### DATABASE SCHEMA:
 {schema_context}
 
 {glossary_context}{few_shot_context}
 
-### EXECUTION & SAFETY RULES:
-1. Dialect: Use standard {self.dialect} syntax. Use DATE_TRUNC, INTERVAL, or ILIKE when appropriate.
-2. Read-Only Policy: Generate ONLY SELECT queries. NEVER generate DDL or DML statements (CREATE, DROP, ALTER, INSERT, UPDATE, DELETE, TRUNCATE, GRANT).
-3. Explicit Aliases: Always assign explicit column aliases for aggregated functions (e.g., `SUM(amount) AS total_revenue`).
-4. Disambiguation: Use exact string values from the categorical sample values provided in the schema whenever filtering categorical text columns (e.g. status = 'completed').
-5. Subquery Limits: Prefer clean JOINs or CTEs (WITH clauses) over deeply nested subqueries (max 3 levels).
-6. Row Limit: If the user asks for top/limit or list without specifying count, append `LIMIT 1000`.
-7. Explicit Ambiguity Handling: If the question maps to multiple distinct interpretations (e.g., 'revenue' could mean Gross Revenue vs Net Revenue, or 'top users' could mean by order count vs total spend), set `is_ambiguous = true` and return a list of `clarification_options` with labels, descriptions, and example queries for each interpretation instead of guessing.
+### RULES:
+1. Generate ONLY SELECT queries (read-only). Never DDL/DML.
+2. Use explicit column aliases for aggregate expressions (e.g. `SUM(amount) AS total_revenue`).
+3. Match categorical string values from schema samples.
+4. Append `LIMIT 1000` unless explicit limit is provided.
+5. If the question has multiple distinct business interpretations, set `is_ambiguous = true` and provide `clarification_options`.
 
 USER QUESTION: {question}
 """

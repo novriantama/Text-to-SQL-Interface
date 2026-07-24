@@ -1,7 +1,12 @@
 """LLM Provider adapter using OpenAgentic (Claude Sonnet 4.6), Anthropic Claude Sonnet & OpenAI with Instructor for structured output, explicit ambiguity handling, and multi-query consensus generation."""
 
 import json
+import random
+import threading
+import time
 from pathlib import Path
+from typing import Callable, TypeVar
+import httpx
 from pydantic import BaseModel, Field
 from src.core.config import settings
 from src.core.logger import get_logger
@@ -12,9 +17,29 @@ from src.infrastructure.llm.prompt_builder import DynamicPromptBuilder
 
 logger = get_logger(__name__)
 
+_llm_lock = threading.Lock()
+
+
+def _clean_openagentic_response(response: httpx.Response) -> None:
+    """Strips trailing 'data: [DONE]' or extra payload text from OpenAgentic proxy responses to prevent JSONDecodeError."""
+    try:
+        response.read()
+        if response.content and b"data: [DONE]" in response.content:
+            content_str = response.content.decode("utf-8", errors="ignore")
+            clean_str = content_str.split("data: [DONE]")[0].strip()
+            response._content = clean_str.encode("utf-8")
+    except Exception:
+        pass
+
+
 # Optional Anthropic / OpenAI / Instructor imports
 try:
     import instructor
+    HAS_INSTRUCTOR = True
+except ImportError:
+    HAS_INSTRUCTOR = False
+
+try:
     import anthropic
     HAS_ANTHROPIC = True
 except ImportError:
@@ -25,6 +50,39 @@ try:
     HAS_OPENAI = True
 except ImportError:
     HAS_OPENAI = False
+
+T = TypeVar('T')
+
+
+def call_llm_with_retry(call_fn: Callable[[], T], max_retries: int = 6, initial_delay: float = 2.5) -> T:
+    """Executes LLM API calls with thread-safe locking and exponential backoff retries on rate limits (HTTP 429 / concurrent limit)."""
+    delay = initial_delay
+    last_err: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            with _llm_lock:
+                return call_fn()
+        except Exception as err:
+            last_err = err
+            err_str = str(err).lower()
+            is_retryable = any(k in err_str for k in [
+                "429", "rate_limit", "concurrent_limit", "batas request", "retry",
+                "extra data", "jsondecodeerror", "expecting value", "connection", "timeout", "502", "503", "504"
+            ])
+            if is_retryable and attempt < max_retries:
+                jitter = random.uniform(0.5, 1.5)
+                sleep_time = delay + jitter
+                logger.warning(
+                    f"LLM API rate limit or transient error encountered (attempt {attempt}/{max_retries}): {err}. "
+                    f"Retrying in {sleep_time:.1f}s..."
+                )
+                time.sleep(sleep_time)
+                delay *= 2.0
+            else:
+                raise err
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("call_llm_with_retry failed: max_retries must be at least 1")
 
 
 class InterpretationSchema(BaseModel):
@@ -76,20 +134,22 @@ class InstructorLLMAdapter(LLMPort):
     def _setup_client(self) -> None:
         """Initializes the Instructor client for OpenAgentic, Anthropic, or OpenAI based on settings."""
         if settings.LLM_PROVIDER == "openagentic" or (HAS_OPENAI and settings.OPENAGENTIC_API_KEY):
-            if HAS_OPENAI and settings.OPENAGENTIC_API_KEY:
+            if HAS_OPENAI and HAS_INSTRUCTOR and settings.OPENAGENTIC_API_KEY:
+                http_client = httpx.Client(event_hooks={"response": [_clean_openagentic_response]})
                 raw_client = openai.OpenAI(
                     api_key=settings.OPENAGENTIC_API_KEY,
-                    base_url=settings.OPENAGENTIC_BASE_URL
+                    base_url=settings.OPENAGENTIC_BASE_URL,
+                    http_client=http_client
                 )
-                self._client = instructor.from_openai(raw_client)
+                self._client = instructor.from_openai(raw_client, mode=instructor.Mode.MD_JSON)
                 self.active_model = settings.OPENAGENTIC_MODEL
                 logger.info(
                     f"Initialized OpenAgentic Instructor client using base URL '{settings.OPENAGENTIC_BASE_URL}' and model '{settings.OPENAGENTIC_MODEL}'."
                 )
             else:
-                logger.info("OpenAI library or OpenAgentic API key not loaded. Fallback/Mock mode active.")
+                logger.info("OpenAI/Instructor library or OpenAgentic API key not loaded. Fallback/Mock mode active.")
         elif settings.LLM_PROVIDER == "anthropic":
-            if HAS_ANTHROPIC and settings.ANTHROPIC_API_KEY:
+            if HAS_ANTHROPIC and HAS_INSTRUCTOR and settings.ANTHROPIC_API_KEY:
                 raw_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
                 self._client = instructor.from_anthropic(raw_client)
                 self.active_model = settings.ANTHROPIC_MODEL
@@ -97,7 +157,7 @@ class InstructorLLMAdapter(LLMPort):
             else:
                 logger.info("Anthropic API key or library not loaded. Fallback/Mock mode active.")
         elif settings.LLM_PROVIDER == "openai":
-            if HAS_OPENAI and settings.OPENAI_API_KEY:
+            if HAS_OPENAI and HAS_INSTRUCTOR and settings.OPENAI_API_KEY:
                 raw_client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
                 self._client = instructor.from_openai(raw_client)
                 self.active_model = settings.OPENAI_MODEL
@@ -178,20 +238,22 @@ class InstructorLLMAdapter(LLMPort):
             )
 
         try:
-            if settings.LLM_PROVIDER == "anthropic":
-                res: LLMSQLOutputSchema = self._client.messages.create(
-                    model=self.active_model,
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_model=LLMSQLOutputSchema
-                )
-            else:
-                # OpenAgentic & OpenAI OpenAI-compatible client endpoint
-                res = self._client.chat.completions.create(
-                    model=self.active_model,
-                    response_model=LLMSQLOutputSchema,
-                    messages=[{"role": "user", "content": prompt}]
-                )
+            def _invoke():
+                if settings.LLM_PROVIDER == "anthropic":
+                    return self._client.messages.create(
+                        model=self.active_model,
+                        max_tokens=1024,
+                        messages=[{"role": "user", "content": prompt}],
+                        response_model=LLMSQLOutputSchema
+                    )
+                else:
+                    return self._client.chat.completions.create(
+                        model=self.active_model,
+                        response_model=LLMSQLOutputSchema,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+
+            res: LLMSQLOutputSchema = call_llm_with_retry(_invoke)
 
             clarification_opts = [
                 QueryInterpretation(
@@ -253,19 +315,22 @@ class InstructorLLMAdapter(LLMPort):
         )
 
         try:
-            if settings.LLM_PROVIDER == "anthropic":
-                res: LLMSQLOutputSchema = self._client.messages.create(
-                    model=self.active_model,
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": alt_prompt}],
-                    response_model=LLMSQLOutputSchema
-                )
-            else:
-                res = self._client.chat.completions.create(
-                    model=self.active_model,
-                    response_model=LLMSQLOutputSchema,
-                    messages=[{"role": "user", "content": alt_prompt}]
-                )
+            def _invoke():
+                if settings.LLM_PROVIDER == "anthropic":
+                    return self._client.messages.create(
+                        model=self.active_model,
+                        max_tokens=1024,
+                        messages=[{"role": "user", "content": alt_prompt}],
+                        response_model=LLMSQLOutputSchema
+                    )
+                else:
+                    return self._client.chat.completions.create(
+                        model=self.active_model,
+                        response_model=LLMSQLOutputSchema,
+                        messages=[{"role": "user", "content": alt_prompt}]
+                    )
+
+            res: LLMSQLOutputSchema = call_llm_with_retry(_invoke)
 
             return GeneratedSQL(
                 sql=res.sql,
@@ -290,18 +355,21 @@ class InstructorLLMAdapter(LLMPort):
 
         prompt = f"Explain in a single, simple English question what data this SQL query retrieves: `{sql_query}`"
         try:
-            if settings.LLM_PROVIDER == "anthropic":
-                resp = self._client.messages.create(
-                    model=self.active_model,
-                    max_tokens=256,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return resp.content[0].text.strip()
-            else:
-                resp = self._client.chat.completions.create(
-                    model=self.active_model,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return resp.choices[0].message.content.strip()
+            def _invoke():
+                if settings.LLM_PROVIDER == "anthropic":
+                    resp = self._client.messages.create(
+                        model=self.active_model,
+                        max_tokens=256,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    return resp.content[0].text.strip()
+                else:
+                    resp = self._client.chat.completions.create(
+                        model=self.active_model,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    return resp.choices[0].message.content.strip()
+
+            return call_llm_with_retry(_invoke)
         except Exception:
             return f"What data is selected by: '{sql_query}'?"
