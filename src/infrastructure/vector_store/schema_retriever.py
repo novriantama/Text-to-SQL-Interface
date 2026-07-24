@@ -82,16 +82,23 @@ class EmbeddingSchemaRetriever(VectorStorePort):
             selected_tables.add(top_table)
 
         # 3. Foreign Key Graph Expansion
-        # Include connected tables if they are linked via FK relationships
+        # Always include FK target tables for selected tables to preserve JOIN integrity
         expanded_tables = set(selected_tables)
-        for table_name in selected_tables:
-            table = full_schema.tables[table_name]
+        for table_name in list(selected_tables):
+            table = full_schema.tables.get(table_name)
+            if not table:
+                continue
             for col in table.columns:
                 if col.is_foreign_key and col.foreign_table and col.foreign_table in full_schema.tables:
-                    # Include FK target table if score is reasonable (>= 50% of threshold)
-                    fk_score = scores.get(col.foreign_table, 0.0)
-                    if fk_score >= (threshold * 0.5):
-                        expanded_tables.add(col.foreign_table)
+                    expanded_tables.add(col.foreign_table)
+
+        # Reverse FK check for linked child tables with reasonable relevance
+        for t_name, table in full_schema.tables.items():
+            if t_name not in expanded_tables:
+                for col in table.columns:
+                    if col.is_foreign_key and col.foreign_table in selected_tables:
+                        if scores.get(t_name, 0.0) >= (threshold * 0.3):
+                            expanded_tables.add(t_name)
 
         # 4. Construct Filtered Schema
         filtered_schema = DatabaseSchema()

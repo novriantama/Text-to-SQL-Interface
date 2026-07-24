@@ -17,6 +17,12 @@ class FewShotRepository:
 
     DEFAULT_EXAMPLES: list[FewShotExample] = [
         FewShotExample(
+            question="Which user spent the most money this year?",
+            sql="SELECT u.id, u.username, SUM(o.amount) AS total_spent FROM users u JOIN orders o ON u.id = o.user_id WHERE o.order_date >= DATE_TRUNC('year', CURRENT_DATE) GROUP BY u.id, u.username ORDER BY total_spent DESC LIMIT 1;",
+            explanation="Joins users and orders, aggregates spend for the current year grouped by user, and returns the top spending user.",
+            tags=["user", "spend", "most", "money", "year", "group_by", "join"]
+        ),
+        FewShotExample(
             question="What is the total revenue for the current month?",
             sql="SELECT SUM(amount) AS total_revenue FROM orders WHERE order_date >= DATE_TRUNC('month', CURRENT_DATE) AND status = 'completed';",
             explanation="Aggregates completed order amounts for the current month using PostgreSQL DATE_TRUNC.",
@@ -68,8 +74,9 @@ class FewShotRepository:
 
     def get_relevant_examples(self, question: str, limit: int = 4) -> list[FewShotExample]:
         """Selects up to `limit` few-shot examples based on keyword match, falling back to top default examples."""
+        import re
         with self._lock:
-            q_words = set(question.lower().split())
+            q_words = set(re.findall(r"\w+", question.lower()))
             
             scored_examples = []
             for example in self.examples:
@@ -79,7 +86,7 @@ class FewShotRepository:
                     if tag in q_words:
                         score += 2
                 # Score based on question word overlap
-                ex_words = set(example.question.lower().split())
+                ex_words = set(re.findall(r"\w+", example.question.lower()))
                 score += len(q_words.intersection(ex_words))
                 scored_examples.append((score, example))
 

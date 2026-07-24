@@ -65,12 +65,12 @@ class DynamicPromptBuilder:
         else:
             resolved_shots = self.few_shot_repo.get_relevant_examples(question, limit=2)
 
-        few_shot_lines = ["### FEW-SHOT EXAMPLES:"]
+        few_shot_lines = ["### FEW-SHOT EXAMPLES (QUESTION-TO-SQL PAIRS):"]
         for shot in resolved_shots:
             few_shot_lines.append(f"Q: {shot.question}\nSQL: {shot.sql}")
         few_shot_context = "\n\n".join(few_shot_lines).strip()
 
-        # 4. Construct Concise System Prompt
+        # 4. Construct System Prompt
         prompt = f"""You are a {self.dialect} Data Engineer. Translate the user's question into a valid, efficient {self.dialect} SELECT query strictly using the schema below.
 
 ### DATABASE SCHEMA:
@@ -78,12 +78,13 @@ class DynamicPromptBuilder:
 
 {glossary_context}{few_shot_context}
 
-### RULES:
+### EXECUTION & SAFETY RULES:
 1. Generate ONLY SELECT queries (read-only). Never DDL/DML.
-2. Use explicit column aliases for aggregate expressions (e.g. `SUM(amount) AS total_revenue`).
-3. Match categorical string values from schema samples.
-4. Append `LIMIT 1000` unless explicit limit is provided.
-5. If the question has multiple distinct business interpretations, set `is_ambiguous = true` and provide `clarification_options`.
+2. Entity Queries: Questions asking "Which user...", "Which customer...", "Which product...", or "Who..." MUST return the entity identifier/name (e.g. u.username, p.name) and aggregate value, performing a JOIN and GROUP BY (e.g. JOIN users u ON ... GROUP BY u.id, u.username ORDER BY total_spent DESC LIMIT 1). Never return an un-grouped scalar SUM() for an entity question.
+3. Use explicit column aliases for aggregate expressions (e.g. `SUM(amount) AS total_spent`).
+4. Match categorical string values from schema samples.
+5. Append `LIMIT 1000` unless an explicit limit or top count is provided.
+6. If the question has multiple distinct business interpretations, set `is_ambiguous = true` and provide `clarification_options`.
 
 USER QUESTION: {question}
 """

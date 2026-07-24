@@ -36,25 +36,27 @@ class DatabaseSchema:
     tables: dict[str, TableSchema] = field(default_factory=dict)
 
     def to_prompt_str(self) -> str:
-        """Converts schema metadata into readable compact string prompt context for LLM."""
+        """Converts schema metadata into readable string prompt context for LLM."""
         lines = []
         for table_name, table in self.tables.items():
             table_header = f"Table: {table_name}"
             if table.description:
                 table_header += f" ({table.description})"
+            if table.row_count_estimate is not None:
+                table_header += f" [~{table.row_count_estimate} rows]"
             lines.append(table_header)
 
             for col in table.columns:
                 col_str = f"  - {col.name} ({col.data_type})"
                 if col.is_primary_key:
-                    col_str += " [PK]"
+                    col_str += " [PRIMARY KEY]"
                 if col.is_foreign_key:
-                    col_str += f" [FK->{col.foreign_table}.{col.foreign_column}]"
+                    col_str += f" [FK -> {col.foreign_table}.{col.foreign_column}]"
                 if col.description:
                     col_str += f" -- {col.description}"
                 if col.sample_values:
-                    formatted_samples = [repr(val) for val in col.sample_values[:3]]
-                    col_str += f" [Samples: {', '.join(formatted_samples)}]"
+                    formatted_samples = [repr(val) for val in col.sample_values[:5]]
+                    col_str += f" [Sample values: {', '.join(formatted_samples)}]"
                 lines.append(col_str)
             lines.append("")
         return "\n".join(lines).strip()

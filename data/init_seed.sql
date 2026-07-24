@@ -1,4 +1,4 @@
--- Initial Seed Script for Text-to-SQL Enterprise Database
+-- Initial Seed Script for Text-to-SQL Enterprise Database (~100MB+ data size)
 -- Executed automatically upon PostgreSQL container initialization
 
 CREATE TABLE IF NOT EXISTS users (
@@ -42,39 +42,68 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Seed Users
-INSERT INTO users (username, email, status, created_at) VALUES
-('alice_smith', 'alice@example.com', 'active', '2024-01-15 10:00:00'),
-('john_doe', 'john@example.com', 'active', '2024-02-01 11:30:00'),
-('charlie_brown', 'charlie@example.com', 'inactive', '2023-11-20 09:15:00'),
-('david_miller', 'david@example.com', 'active', '2024-03-10 14:20:00')
+-- Seed Hand-Curated Golden Test Data First
+INSERT INTO users (id, username, email, status, created_at) VALUES
+(1, 'alice_smith', 'alice@example.com', 'active', '2024-01-15 10:00:00'),
+(2, 'john_doe', 'john@example.com', 'active', '2024-02-01 11:30:00'),
+(3, 'charlie_brown', 'charlie@example.com', 'inactive', '2023-11-20 09:15:00'),
+(4, 'david_miller', 'david@example.com', 'active', '2024-03-10 14:20:00')
 ON CONFLICT (username) DO NOTHING;
 
--- Seed Products
-INSERT INTO products (name, category, price, stock_quantity) VALUES
-('Laptop Pro 15', 'Electronics', 1299.99, 45),
-('Wireless Mouse', 'Electronics', 29.99, 150),
-('Mechanical Keyboard', 'Electronics', 89.99, 80),
-('SQL Engineering Guide', 'Books', 49.99, 200),
-('Ergonomic Office Chair', 'Furniture', 249.99, 30),
-('Coffee Mug 16oz', 'Kitchenware', 14.99, 0)
-ON CONFLICT DO NOTHING;
+-- Bulk Seed Additional Users (25,000 Users)
+INSERT INTO users (username, email, status, created_at)
+SELECT 
+    'user_' || g AS username,
+    'user_' || g || '@enterprise-domain.com' AS email,
+    (ARRAY['active', 'active', 'active', 'inactive', 'pending', 'suspended'])[floor(random() * 6 + 1)] AS status,
+    TIMESTAMP '2023-01-01 00:00:00' + (random() * (NOW() - TIMESTAMP '2023-01-01 00:00:00')) AS created_at
+FROM generate_series(5, 25000) AS g
+ON CONFLICT (username) DO NOTHING;
 
--- Seed Orders
-INSERT INTO orders (id, user_id, amount, status, shipping_zip, order_date) VALUES
-(1001, 1, 1329.98, 'completed', '90210', '2024-03-01 12:00:00'),
-(1002, 2, 89.99, 'completed', '10001', '2024-03-05 15:45:00'),
-(1003, 1, 49.99, 'completed', '90210', '2024-03-12 09:30:00'),
-(1004, 4, 249.99, 'pending', '94105', '2024-03-15 16:10:00'),
-(1005, 2, 14.99, 'refunded', '10001', '2024-02-18 10:05:00')
+-- Seed Hand-Curated Golden Products
+INSERT INTO products (id, name, category, price, stock_quantity, created_at) VALUES
+(1, 'Laptop Pro 15', 'Electronics', 1299.99, 45, '2024-01-01 00:00:00'),
+(2, 'Wireless Mouse', 'Electronics', 29.99, 150, '2024-01-01 00:00:00'),
+(3, 'Mechanical Keyboard', 'Electronics', 89.99, 80, '2024-01-01 00:00:00'),
+(4, 'SQL Engineering Guide', 'Books', 49.99, 200, '2024-01-05 00:00:00'),
+(5, 'Ergonomic Office Chair', 'Furniture', 249.99, 30, '2024-01-10 00:00:00'),
+(6, 'Coffee Mug 16oz', 'Kitchenware', 14.99, 0, '2024-01-12 00:00:00')
 ON CONFLICT (id) DO NOTHING;
 
--- Seed Order Items
-INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES
-(1001, 1, 1, 1299.99),
-(1001, 2, 1, 29.99),
-(1002, 3, 1, 89.99),
-(1003, 4, 1, 49.99),
-(1004, 5, 1, 249.99),
-(1005, 6, 1, 14.99)
-ON CONFLICT DO NOTHING;
+-- Bulk Seed Additional Products (8,000 Products)
+INSERT INTO products (name, category, price, stock_quantity, created_at)
+SELECT 
+    (ARRAY['Ultra', 'Pro', 'Smart', 'Eco', 'Deluxe', 'Compact', 'Precision', 'Enterprise'])[floor(random() * 8 + 1)] || ' ' ||
+    (ARRAY['Gadget', 'Device', 'Widget', 'Module', 'Tool', 'Appliance', 'Kit', 'Item'])[floor(random() * 8 + 1)] || ' ' || g AS name,
+    (ARRAY['Electronics', 'Books', 'Furniture', 'Kitchenware', 'Clothing', 'Software', 'Sports', 'Automotive'])[floor(random() * 8 + 1)] AS category,
+    ROUND((random() * 495 + 5)::numeric, 2) AS price,
+    floor(random() * 500)::int AS stock_quantity,
+    TIMESTAMP '2023-01-01 00:00:00' + (random() * (NOW() - TIMESTAMP '2023-01-01 00:00:00')) AS created_at
+FROM generate_series(7, 8000) AS g;
+
+-- Bulk Seed Orders (300,000 Orders)
+INSERT INTO orders (user_id, amount, status, shipping_zip, order_date)
+SELECT 
+    floor(random() * 24996 + 1)::int AS user_id,
+    ROUND((random() * 980 + 10)::numeric, 2) AS amount,
+    (ARRAY['completed', 'completed', 'completed', 'pending', 'shipped', 'cancelled', 'refunded'])[floor(random() * 7 + 1)] AS status,
+    LPAD(floor(random() * 89999 + 10000)::text, 5, '0') AS shipping_zip,
+    TIMESTAMP '2023-01-01 00:00:00' + (random() * (NOW() - TIMESTAMP '2023-01-01 00:00:00')) AS order_date
+FROM generate_series(1, 300000) AS g;
+
+-- Bulk Seed Order Items (550,000 Order Items)
+INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+SELECT 
+    floor(random() * 299990 + 1)::int AS order_id,
+    floor(random() * 7990 + 1)::int AS product_id,
+    floor(random() * 5 + 1)::int AS quantity,
+    ROUND((random() * 190 + 10)::numeric, 2) AS unit_price
+FROM generate_series(1, 550000) AS g;
+
+-- Bulk Seed Audit Logs (300,000 Audit Logs)
+INSERT INTO audit_logs (action, performed_by, timestamp)
+SELECT 
+    (ARRAY['USER_LOGIN', 'ORDER_CREATED', 'PAYMENT_PROCESSED', 'PRODUCT_UPDATED', 'STOCK_ADJUSTMENT', 'SCHEMA_CHECKED', 'SECURITY_AUDIT'])[floor(random() * 7 + 1)] AS action,
+    'user_' || floor(random() * 24996 + 1)::text AS performed_by,
+    TIMESTAMP '2023-01-01 00:00:00' + (random() * (NOW() - TIMESTAMP '2023-01-01 00:00:00')) AS timestamp
+FROM generate_series(1, 300000) AS g;
