@@ -19,11 +19,18 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field(default="INFO", description="Logging level")
     SECRET_KEY: str = Field(default="dev-secret-key-32-chars-minimum-len", description="Application secret key")
 
+    # PostgreSQL Database Credentials
+    POSTGRES_USER: str = Field(default="text_sql_admin", description="PostgreSQL Username")
+    POSTGRES_PASSWORD: str = Field(default="admin_password", description="PostgreSQL Password")
+    POSTGRES_DB: str = Field(default="text_to_sql_db", description="PostgreSQL Database Name")
+    POSTGRES_HOST: str = Field(default="postgres", description="PostgreSQL Hostname")
+    POSTGRES_PORT: int = Field(default=5432, description="PostgreSQL Port")
+
     # Database Configuration
-    DB_DRIVER: str = Field(default="sqlite", description="Database driver (postgresql/duckdb/sqlite)")
+    DB_DRIVER: str = Field(default="postgresql", description="Database driver (postgresql/sqlite)")
     READONLY_DB_URI: str = Field(
-        default="sqlite:///./data/sample_db.sqlite",
-        description="Database connection URI with read-only permissions"
+        default="postgresql://text_sql_admin:admin_password@postgres:5432/text_to_sql_db",
+        description="Database connection URI"
     )
 
     # LLM Settings
