@@ -15,3 +15,4 @@ class FeedbackRequestDTO(BaseModel):
     generated_sql: str
     is_correct: bool
     comments: str | None = None
+    suggested_sql: str | None = None

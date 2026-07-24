@@ -5,6 +5,7 @@ import AmbiguityCard from './components/AmbiguityCard';
 import ConfidenceBreakdown from './components/ConfidenceBreakdown';
 import SqlViewer from './components/SqlViewer';
 import DataTable from './components/DataTable';
+import FeedbackWidget from './components/FeedbackWidget';
 import HistorySidebar from './components/HistorySidebar';
 
 export default function App() {
@@ -168,6 +169,11 @@ export default function App() {
                   <DataTable
                     results={response.results}
                     explainPlan={response.results ? response.results.explain_plan : null}
+                  />
+
+                  <FeedbackWidget
+                    question={response.question}
+                    generatedSql={response.generated_sql}
                   />
                 </>
               )}

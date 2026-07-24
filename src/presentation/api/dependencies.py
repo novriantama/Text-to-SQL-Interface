@@ -5,12 +5,19 @@ from src.infrastructure.db.connection import get_db_engine
 from src.infrastructure.db.sandbox_executor import SandboxDatabaseAdapter
 from src.infrastructure.guardrails.ast_parser import ASTGuardrailAdapter
 from src.infrastructure.llm.instructor_client import InstructorLLMAdapter
+from src.infrastructure.llm.few_shot_repository import FewShotRepository
 from src.infrastructure.validation.back_translator import DefaultHallucinationValidatorAdapter
 from src.infrastructure.vector_store.schema_retriever import EmbeddingSchemaRetriever
 from src.infrastructure.history.history_repository import QueryHistoryRepository
 from src.application.use_cases.process_text_to_sql import ProcessTextToSQLUseCase
 from src.application.use_cases.extract_schema import ExtractSchemaUseCase
 from src.application.use_cases.submit_feedback import SubmitFeedbackUseCase
+
+
+@lru_cache()
+def get_few_shot_repository() -> FewShotRepository:
+    """Instantiates singleton FewShotRepository for feedback flywheel alignment."""
+    return FewShotRepository()
 
 
 @lru_cache()
@@ -43,8 +50,9 @@ def get_extract_schema_use_case() -> ExtractSchemaUseCase:
 
 @lru_cache()
 def get_submit_feedback_use_case() -> SubmitFeedbackUseCase:
-    """Instantiates submit feedback use case."""
-    return SubmitFeedbackUseCase()
+    """Instantiates submit feedback use case wired with FewShotRepository singleton."""
+    few_shot_repo = get_few_shot_repository()
+    return SubmitFeedbackUseCase(few_shot_repo=few_shot_repo)
 
 
 @lru_cache()

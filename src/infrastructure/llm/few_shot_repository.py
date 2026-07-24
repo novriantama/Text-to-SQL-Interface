@@ -1,10 +1,19 @@
-"""Repository for managing and retrieving relevant few-shot question-to-SQL pairs."""
+"""Repository for managing, storing, and retrieving relevant few-shot question-to-SQL pairs."""
 
+from threading import Lock
+from src.core.logger import get_logger
 from src.domain.entities.prompt import FewShotExample
+
+logger = get_logger(__name__)
 
 
 class FewShotRepository:
-    """Stores and dynamically retrieves 3-5 relevant question-to-SQL few-shot pairs."""
+    """Stores and dynamically retrieves 3-5 relevant question-to-SQL few-shot pairs.
+    
+    Supports the Feedback Flywheel:
+    User-approved correct queries are dynamically registered via `add_example` and immediately
+    influence future LLM SQL generation prompts.
+    """
 
     DEFAULT_EXAMPLES: list[FewShotExample] = [
         FewShotExample(
@@ -40,30 +49,46 @@ class FewShotRepository:
     ]
 
     def __init__(self, custom_examples: list[FewShotExample] | None = None) -> None:
+        self._lock = Lock()
         self.examples = custom_examples if custom_examples is not None else list(self.DEFAULT_EXAMPLES)
+
+    def add_example(self, example: FewShotExample) -> None:
+        """Dynamically inserts a user-approved correct pair into the few-shot flywheel repository."""
+        with self._lock:
+            # Avoid duplicate insertion for exact same question
+            for idx, existing in enumerate(self.examples):
+                if existing.question.lower().strip() == example.question.lower().strip():
+                    self.examples[idx] = example
+                    logger.info(f"[FLYWHEEL FEW-SHOT UPDATED] '{example.question}' -> `{example.sql}`")
+                    return
+            
+            # Insert at the beginning so newly learned user pairs have high priority
+            self.examples.insert(0, example)
+            logger.info(f"[FLYWHEEL FEW-SHOT ADDED] '{example.question}' -> `{example.sql}`")
 
     def get_relevant_examples(self, question: str, limit: int = 4) -> list[FewShotExample]:
         """Selects up to `limit` few-shot examples based on keyword match, falling back to top default examples."""
-        q_words = set(question.lower().split())
-        
-        scored_examples = []
-        for example in self.examples:
-            score = 0
-            # Score based on tag matches
-            for tag in example.tags:
-                if tag in q_words:
-                    score += 2
-            # Score based on question word overlap
-            ex_words = set(example.question.lower().split())
-            score += len(q_words.intersection(ex_words))
-            scored_examples.append((score, example))
+        with self._lock:
+            q_words = set(question.lower().split())
+            
+            scored_examples = []
+            for example in self.examples:
+                score = 0
+                # Score based on tag matches
+                for tag in example.tags:
+                    if tag in q_words:
+                        score += 2
+                # Score based on question word overlap
+                ex_words = set(example.question.lower().split())
+                score += len(q_words.intersection(ex_words))
+                scored_examples.append((score, example))
 
-        # Sort by score descending
-        scored_examples.sort(key=lambda x: x[0], reverse=True)
-        selected = [ex for score, ex in scored_examples[:limit]]
+            # Sort by score descending
+            scored_examples.sort(key=lambda x: x[0], reverse=True)
+            selected = [ex for score, ex in scored_examples[:limit]]
 
-        # Ensure we always return between 3 and limit examples
-        if len(selected) < min(3, len(self.examples)):
-            return self.examples[:limit]
+            # Ensure we always return between 3 and limit examples
+            if len(selected) < min(3, len(self.examples)):
+                return self.examples[:limit]
 
-        return selected
+            return selected
