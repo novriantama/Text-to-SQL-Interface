@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { ThumbsUp, ThumbsDown, Send, CheckCircle2, MessageSquare } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 
 export default function FeedbackWidget({ question, generatedSql }) {
-  const [feedbackStatus, setFeedbackStatus] = useState(null); // null, 'submitting', 'submitted_correct', 'submitted_incorrect'
+  const [feedbackStatus, setFeedbackStatus] = useState(null);
   const [showIncorrectForm, setShowIncorrectForm] = useState(false);
   const [comments, setComments] = useState('');
   const [suggestedSql, setSuggestedSql] = useState('');
@@ -11,7 +12,7 @@ export default function FeedbackWidget({ question, generatedSql }) {
   const submitFeedback = async (isCorrect, commentText = comments, sqlText = suggestedSql) => {
     setFeedbackStatus('submitting');
     try {
-      const res = await fetch('/v1/feedback', {
+      const res = await fetch(`${API_BASE_URL}/v1/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -22,6 +23,12 @@ export default function FeedbackWidget({ question, generatedSql }) {
           suggested_sql: sqlText || null
         })
       });
+
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await res.text();
+        throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}...`);
+      }
 
       const data = await res.json();
       if (res.ok) {

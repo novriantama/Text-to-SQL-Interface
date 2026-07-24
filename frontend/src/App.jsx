@@ -7,6 +7,7 @@ import SqlViewer from './components/SqlViewer';
 import DataTable from './components/DataTable';
 import FeedbackWidget from './components/FeedbackWidget';
 import HistorySidebar from './components/HistorySidebar';
+import { API_BASE_URL } from './config';
 
 export default function App() {
   const [sessionId, setSessionId] = useState('default_session');
@@ -18,7 +19,7 @@ export default function App() {
 
   const fetchHistory = useCallback(async (sid = sessionId) => {
     try {
-      const res = await fetch(`/v1/history?session_id=${encodeURIComponent(sid)}`);
+      const res = await fetch(`${API_BASE_URL}/v1/history?session_id=${encodeURIComponent(sid)}`);
       if (res.ok) {
         const data = await res.json();
         setHistory(data);
@@ -39,11 +40,17 @@ export default function App() {
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/v1/query', {
+      const res = await fetch(`${API_BASE_URL}/v1/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: queryText, session_id: sessionId })
       });
+
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await res.text();
+        throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}...`);
+      }
 
       const data = await res.json();
 
@@ -70,11 +77,17 @@ export default function App() {
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/v1/query', {
+      const res = await fetch(`${API_BASE_URL}/v1/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: `[Custom SQL]: ${customSql}`, session_id: sessionId })
       });
+
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await res.text();
+        throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}...`);
+      }
 
       const data = await res.json();
 
