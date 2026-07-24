@@ -27,7 +27,23 @@ class Settings(BaseSettings):
     )
 
     # LLM Settings
-    LLM_PROVIDER: Literal["openai", "anthropic"] = Field(default="anthropic", description="Active LLM provider")
+    LLM_PROVIDER: Literal["openai", "anthropic", "openagentic"] = Field(
+        default="openagentic",
+        description="Active LLM provider (openagentic/anthropic/openai)"
+    )
+    OPENAGENTIC_API_KEY: str = Field(
+        default="sk-c1a4f14efe3bad784c112b1cae142a231eac1509682c9ee7d096a3b5972a86ba",
+        description="OpenAgentic API Key"
+    )
+    OPENAGENTIC_BASE_URL: str = Field(
+        default="https://openagentic.id/api/v1",
+        description="OpenAgentic Base Endpoint URL"
+    )
+    OPENAGENTIC_MODEL: str = Field(
+        default="claude-sonnet-4.6",
+        description="OpenAgentic LLM Model Name"
+    )
+
     OPENAI_API_KEY: str = Field(default="", description="OpenAI API Key")
     OPENAI_MODEL: str = Field(default="gpt-4o", description="OpenAI LLM Model Name")
     ANTHROPIC_API_KEY: str = Field(default="", description="Anthropic API Key")

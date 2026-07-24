@@ -1,4 +1,4 @@
-"""LLM Provider adapter using Anthropic Claude Sonnet & OpenAI with Instructor for structured output, explicit ambiguity handling, and multi-query consensus generation."""
+"""LLM Provider adapter using OpenAgentic (Claude Sonnet 4.6), Anthropic Claude Sonnet & OpenAI with Instructor for structured output, explicit ambiguity handling, and multi-query consensus generation."""
 
 import json
 from pathlib import Path
@@ -52,11 +52,12 @@ class LLMSQLOutputSchema(BaseModel):
 
 
 class InstructorLLMAdapter(LLMPort):
-    """LLM client adapter implementing structured output generation, alternative query formulation, and back-translation via Anthropic Claude Sonnet."""
+    """LLM client adapter supporting OpenAgentic (Claude Sonnet 4.6), Anthropic, and OpenAI via Instructor."""
 
     def __init__(self) -> None:
         self.prompt_builder = DynamicPromptBuilder(dialect="PostgreSQL")
         self._client = None
+        self.active_model = settings.OPENAGENTIC_MODEL
         self._golden_dataset = self._load_golden_dataset()
         self._setup_client()
 
@@ -73,18 +74,33 @@ class InstructorLLMAdapter(LLMPort):
             return {}
 
     def _setup_client(self) -> None:
-        """Initializes the Instructor client for Anthropic or OpenAI based on settings."""
-        if settings.LLM_PROVIDER == "anthropic":
+        """Initializes the Instructor client for OpenAgentic, Anthropic, or OpenAI based on settings."""
+        if settings.LLM_PROVIDER == "openagentic" or (HAS_OPENAI and settings.OPENAGENTIC_API_KEY):
+            if HAS_OPENAI and settings.OPENAGENTIC_API_KEY:
+                raw_client = openai.OpenAI(
+                    api_key=settings.OPENAGENTIC_API_KEY,
+                    base_url=settings.OPENAGENTIC_BASE_URL
+                )
+                self._client = instructor.from_openai(raw_client)
+                self.active_model = settings.OPENAGENTIC_MODEL
+                logger.info(
+                    f"Initialized OpenAgentic Instructor client using base URL '{settings.OPENAGENTIC_BASE_URL}' and model '{settings.OPENAGENTIC_MODEL}'."
+                )
+            else:
+                logger.info("OpenAI library or OpenAgentic API key not loaded. Fallback/Mock mode active.")
+        elif settings.LLM_PROVIDER == "anthropic":
             if HAS_ANTHROPIC and settings.ANTHROPIC_API_KEY:
                 raw_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
                 self._client = instructor.from_anthropic(raw_client)
+                self.active_model = settings.ANTHROPIC_MODEL
                 logger.info(f"Initialized Anthropic Instructor client using model '{settings.ANTHROPIC_MODEL}'.")
             else:
-                logger.info("Anthropic API key or library not loaded. Mock mode active.")
+                logger.info("Anthropic API key or library not loaded. Fallback/Mock mode active.")
         elif settings.LLM_PROVIDER == "openai":
             if HAS_OPENAI and settings.OPENAI_API_KEY:
                 raw_client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
                 self._client = instructor.from_openai(raw_client)
+                self.active_model = settings.OPENAI_MODEL
                 logger.info(f"Initialized OpenAI Instructor client using model '{settings.OPENAI_MODEL}'.")
 
     def generate_sql(
@@ -93,7 +109,7 @@ class InstructorLLMAdapter(LLMPort):
         schema_context: DatabaseSchema,
         few_shots: list[dict] | None = None
     ) -> GeneratedSQL:
-        """Generates structured SQL query using Anthropic Claude Sonnet structured output."""
+        """Generates structured SQL query using Claude Sonnet 4.6 structured output via OpenAgentic/Instructor."""
         prompt = self.prompt_builder.build_prompt(question, schema_context, few_shots)
 
         if self._client is None:
@@ -103,7 +119,6 @@ class InstructorLLMAdapter(LLMPort):
 
             if golden_match:
                 if golden_match.get("should_be_blocked", False):
-                    # Return the dangerous query string so the AST Guardrail layer intercepts & blocks it
                     return GeneratedSQL(
                         sql=question if ("SELECT" in question.upper() or "DROP" in question.upper() or "UPDATE" in question.upper() or "TRUNCATE" in question.upper() or "DELETE" in question.upper()) else "DROP TABLE users;",
                         explanation="Dangerous or invalid query attempt.",
@@ -142,35 +157,12 @@ class InstructorLLMAdapter(LLMPort):
                         is_ambiguous=False
                     )
 
-                # Return verified golden SQL
                 return GeneratedSQL(
                     sql=golden_match.get("golden_sql", "SELECT * FROM orders LIMIT 100;"),
                     explanation=f"Generated verified SQL for: '{question}'",
                     confidence_estimate=0.95,
                     accessed_tables=golden_match.get("expected_tables", ["orders"]),
                     is_ambiguous=False
-                )
-
-            # Check general ambiguity keywords
-            if "revenue" in q_clean and "ambiguous" in q_clean:
-                return GeneratedSQL(
-                    sql="SELECT SUM(amount) FROM orders;",
-                    explanation="Ambiguous revenue query detected.",
-                    confidence_estimate=0.50,
-                    accessed_tables=["orders"],
-                    is_ambiguous=True,
-                    clarification_options=[
-                        QueryInterpretation(
-                            label="Gross Revenue",
-                            description="Calculates sum of all order amounts regardless of status.",
-                            example_sql="SELECT SUM(amount) AS gross_revenue FROM orders;"
-                        ),
-                        QueryInterpretation(
-                            label="Net Revenue",
-                            description="Calculates sum of completed order amounts minus refunds.",
-                            example_sql="SELECT SUM(amount) AS net_revenue FROM orders WHERE status = 'completed';"
-                        )
-                    ]
                 )
 
             # Fallback mock generator when API keys are omitted in development/test
@@ -188,20 +180,17 @@ class InstructorLLMAdapter(LLMPort):
         try:
             if settings.LLM_PROVIDER == "anthropic":
                 res: LLMSQLOutputSchema = self._client.messages.create(
-                    model=settings.ANTHROPIC_MODEL,
+                    model=self.active_model,
                     max_tokens=1024,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
+                    messages=[{"role": "user", "content": prompt}],
                     response_model=LLMSQLOutputSchema
                 )
             else:
+                # OpenAgentic & OpenAI OpenAI-compatible client endpoint
                 res = self._client.chat.completions.create(
-                    model=settings.OPENAI_MODEL,
+                    model=self.active_model,
                     response_model=LLMSQLOutputSchema,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ]
+                    messages=[{"role": "user", "content": prompt}]
                 )
 
             clarification_opts = [
@@ -223,7 +212,7 @@ class InstructorLLMAdapter(LLMPort):
                 clarification_options=clarification_opts
             )
         except Exception as err:
-            logger.error(f"Error invoking LLM structured output: {err}")
+            logger.error(f"Error invoking LLM structured output via {settings.LLM_PROVIDER}: {err}")
             table_name = list(schema_context.tables.keys())[0] if schema_context.tables else "orders"
             return GeneratedSQL(
                 sql=f"SELECT * FROM {table_name} LIMIT 100;",
@@ -266,14 +255,14 @@ class InstructorLLMAdapter(LLMPort):
         try:
             if settings.LLM_PROVIDER == "anthropic":
                 res: LLMSQLOutputSchema = self._client.messages.create(
-                    model=settings.ANTHROPIC_MODEL,
+                    model=self.active_model,
                     max_tokens=1024,
                     messages=[{"role": "user", "content": alt_prompt}],
                     response_model=LLMSQLOutputSchema
                 )
             else:
                 res = self._client.chat.completions.create(
-                    model=settings.OPENAI_MODEL,
+                    model=self.active_model,
                     response_model=LLMSQLOutputSchema,
                     messages=[{"role": "user", "content": alt_prompt}]
                 )
@@ -303,14 +292,14 @@ class InstructorLLMAdapter(LLMPort):
         try:
             if settings.LLM_PROVIDER == "anthropic":
                 resp = self._client.messages.create(
-                    model=settings.ANTHROPIC_MODEL,
+                    model=self.active_model,
                     max_tokens=256,
                     messages=[{"role": "user", "content": prompt}]
                 )
                 return resp.content[0].text.strip()
             else:
                 resp = self._client.chat.completions.create(
-                    model=settings.OPENAI_MODEL,
+                    model=self.active_model,
                     messages=[{"role": "user", "content": prompt}]
                 )
                 return resp.choices[0].message.content.strip()
